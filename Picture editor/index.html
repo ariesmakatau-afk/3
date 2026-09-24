@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cutout Editor</title>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&display=swap" rel="stylesheet">
+<style>
+:root{--mat:#2E5A4C;--line:rgba(255,255,255,.08);--panel:#F7F6F1;--ink:#1D2320;--muted:#5E6B64;--hi:#F2C230;--danger:#C2452D;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--mat:#1C3A31;--panel:#202624;--ink:#ECEFEA;--muted:#9AA8A0}}
+:root[data-theme="dark"]{--mat:#1C3A31;--panel:#202624;--ink:#ECEFEA;--muted:#9AA8A0}
+*,*::before,*::after{box-sizing:inherit}
+html,body{height:100%;margin:0}
+body{background:var(--mat);color:var(--ink);font-family:Manrope,system-ui,-apple-system,"Segoe UI",sans-serif;display:flex;flex-direction:column}
+.bar{background:var(--panel);display:flex;gap:.25rem;padding:.45rem .6rem;overflow-x:auto;align-items:center;flex:none}
+.bar+.bar{border-top:1px solid rgba(127,127,127,.18)}
+.sp{flex:1}
+button,label.btn{font:inherit;font-weight:700;font-size:.85rem;border:0;border-radius:8px;padding:.55rem .75rem;background:transparent;color:var(--ink);cursor:pointer;display:inline-flex;align-items:center;gap:.35rem;white-space:nowrap}
+button:hover,label.btn:hover{background:rgba(127,127,127,.14)}
+button:focus-visible,label.btn:focus-within{outline:2px solid var(--hi);outline-offset:1px}
+button.on{background:var(--hi);color:#1D2320}
+button.solid,label.solid{background:var(--ink);color:var(--panel)}
+button:disabled{opacity:.35;cursor:default}
+.msg{font-size:.85rem;color:var(--muted);padding:0 .4rem;white-space:nowrap}
+input[type=range]{width:110px;accent-color:var(--hi)}
+#stage{flex:1;position:relative;overflow:hidden;background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);background-size:24px 24px;touch-action:none}
+#view{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair}
+#zoom{position:absolute;right:.6rem;bottom:.6rem;display:flex;gap:.2rem;background:var(--panel);border-radius:10px;padding:.2rem;align-items:center}
+#zoom span{font-size:.8rem;font-weight:700;min-width:3.4rem;text-align:center}
+#empty{position:absolute;inset:0;display:grid;place-items:center;text-align:center;color:#fff;padding:1.5rem}
+#empty p{max-width:30ch;line-height:1.5;opacity:.85;margin:.6rem auto 1rem}
+#empty .big{font-size:1.6rem;font-weight:800;letter-spacing:-.02em}
+#empty label.btn{background:var(--hi);color:#1D2320;padding:.8rem 1.2rem;font-size:1rem}
+#ted{position:absolute;display:none;background:rgba(255,255,255,.08);border:1px dashed #F2C230;outline:none;resize:none;overflow:hidden;padding:0;margin:0;white-space:pre;line-height:1.2;z-index:2;caret-color:#F2C230}
+select,input[type=color]{font:inherit;font-size:.85rem;border-radius:6px;border:1px solid rgba(127,127,127,.4);background:var(--panel);color:var(--ink);padding:.3rem}
+input[type=color]{width:2.2rem;height:2rem;padding:.1rem}
+#out{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;flex-direction:column;align-items:center;justify-content:center;gap:1rem;padding:1.5rem;z-index:5}
+#out img{max-width:100%;max-height:70vh;background:repeating-conic-gradient(#ccc 0 25%,#fff 0 50%) 0 0/16px 16px}
+#out p{color:#fff;margin:0;text-align:center}
+</style>
+</head>
+<body>
+<div class="bar">
+  <label class="btn solid">Upload picture<input id="fTop" type="file" accept="image/*" hidden></label>
+  <label class="btn" id="underBtn" style="display:none">Add picture underneath<input id="fUnder" type="file" accept="image/*" hidden></label>
+  <span class="sp"></span>
+  <button id="undo" disabled>Undo</button>
+  <button id="save" disabled>Save</button>
+</div>
+<div class="bar" id="tools">
+  <button data-mode="rect" class="on">Rectangle</button>
+  <button data-mode="trace">Trace</button>
+  <button data-mode="lasso">Lasso</button>
+  <button data-mode="brush">Brush</button>
+  <button data-mode="text">Text</button>
+  <button data-mode="pixel">Pixelate</button>
+  <button data-mode="pan">Move view</button>
+  <button data-mode="under" id="underTool" style="display:none">Move underneath</button>
+</div>
+<div class="bar" id="ctx"></div>
+<div id="stage">
+  <canvas id="view"></canvas>
+  <textarea id="ted" spellcheck="false" aria-label="Edit text"></textarea>
+  <div id="empty"><div><div class="big">Cut a hole. Fill it.</div><p>Upload a picture, select what to cut out, then add a picture underneath to show through.</p><label class="btn">Upload picture<input id="fTop2" type="file" accept="image/*" hidden></label></div></div>
+  <div id="zoom"><button id="zOut" aria-label="Zoom out">−</button><span id="zLbl">100%</span><button id="zIn" aria-label="Zoom in">+</button><button id="zFit">Fit</button></div>
+</div>
+<div id="out"><img id="outImg" alt="Edited picture"><p>Press and hold (or right-click) the picture to save it.</p><button class="solid" id="closeOut">Done</button></div>
+
+<script>
+const $=s=>document.querySelector(s),view=$('#view'),ctx=view.getContext('2d');
+const S={W:0,H:0,base:null,mask:null,under:null,mode:'rect',phase:'idle',erase:false,size:10,sc:1,tx:0,ty:0,hist:[],drag:null,pts:null,cur:null,texts:[],edit:null,busy:false,note:'',pix:14,grain:55,scatter:40};
+let sampleFn=null,canImg=false,dl=null,apiMode=!window.claude;
+const MASKC='#FF2D7A',ptrs=new Map();let pinch=null;
+const mk=(w,h)=>{const c=document.createElement('canvas');c.width=w;c.height=h;return c};
+const cp=c=>{const n=mk(c.width,c.height);n.getContext('2d').drawImage(c,0,0);return n};
+const mx=()=>S.mask.getContext('2d');
+function readImg(f,cb){if(!f)return;const i=new Image();i.onload=()=>cb(i);i.src=URL.createObjectURL(f)}
+
+/* loading */
+function loadTop(f){readImg(f,img=>{const k=Math.min(1,3000/Math.max(img.width,img.height));
+  S.W=Math.round(img.width*k);S.H=Math.round(img.height*k);S.base=mk(S.W,S.H);S.base.getContext('2d').drawImage(img,0,0,S.W,S.H);
+  S.mask=mk(S.W,S.H);S.hist=[];S.texts=[];S.edit=null;S.note='';S.under=null;S.phase='idle';S.pts=null;
+  $('#empty').style.display='none';$('#save').disabled=false;$('#underBtn').style.display='';$('#underTool').style.display='none';
+  updUndo();fit();setMode('rect')})}
+$('#fTop').onchange=e=>{loadTop(e.target.files[0]);e.target.value=''};$('#fTop2').onchange=$('#fTop').onchange;
+$('#fUnder').onchange=e=>{readImg(e.target.files[0],img=>{snap();const c=mk(img.width,img.height);c.getContext('2d').drawImage(img,0,0);
+  S.under={c,x:0,y:0,s:1};fillUnder();$('#underTool').style.display='';$('#underBtn').firstChild.textContent='Replace picture underneath';draw()});e.target.value=''};
+function fillUnder(){const u=S.under;u.s=Math.max(S.W/u.c.width,S.H/u.c.height);u.x=(S.W-u.c.width*u.s)/2;u.y=(S.H-u.c.height*u.s)/2}
+
+/* view */
+function fit(){const r=view.getBoundingClientRect(),d=devicePixelRatio||1;view.width=r.width*d;view.height=r.height*d;
+  if(S.W){S.sc=Math.min((r.width-32)/S.W,(r.height-32)/S.H);S.tx=(r.width-S.W*S.sc)/2;S.ty=(r.height-S.H*S.sc)/2}draw()}
+addEventListener('resize',fit);
+function zoomAt(f,cx,cy){const n=Math.min(64,Math.max(.05,S.sc*f));S.tx=cx-(cx-S.tx)*n/S.sc;S.ty=cy-(cy-S.ty)*n/S.sc;S.sc=n;draw()}
+const center=()=>{const r=view.getBoundingClientRect();return[r.width/2,r.height/2]};
+$('#zIn').onclick=()=>zoomAt(2,...center());$('#zOut').onclick=()=>zoomAt(.5,...center());$('#zFit').onclick=fit;
+view.addEventListener('wheel',e=>{e.preventDefault();const r=view.getBoundingClientRect();zoomAt(Math.exp(-e.deltaY*.0015),e.clientX-r.left,e.clientY-r.top)},{passive:false});
+const toDoc=p=>({x:(p.x-S.tx)/S.sc,y:(p.y-S.ty)/S.sc}),toScr=p=>({x:p.x*S.sc+S.tx,y:p.y*S.sc+S.ty});
+
+function draw(){const d=devicePixelRatio||1,r=view.getBoundingClientRect();ctx.setTransform(d,0,0,d,0,0);ctx.clearRect(0,0,r.width,r.height);
+  $('#zLbl').textContent=Math.round(S.sc*100)+'%';if(!S.W)return;
+  ctx.save();ctx.beginPath();ctx.rect(S.tx,S.ty,S.W*S.sc,S.H*S.sc);ctx.clip();
+  ctx.fillStyle='#fff';ctx.fillRect(0,0,r.width,r.height);ctx.fillStyle='#d4d4d4';
+  for(let y=0;y<r.height;y+=12)for(let x=((y/12)%2)*12;x<r.width;x+=24)ctx.fillRect(x,y,12,12);
+  ctx.translate(S.tx,S.ty);ctx.scale(S.sc,S.sc);ctx.imageSmoothingEnabled=S.sc<2;
+  if(S.under){const u=S.under;ctx.drawImage(u.c,u.x,u.y,u.c.width*u.s,u.c.height*u.s)}
+  ctx.drawImage(S.base,0,0);drawTexts(ctx,S.edit);
+  if(S.mode==='text'){ctx.setLineDash([4/S.sc,3/S.sc]);ctx.lineWidth=1.5/S.sc;ctx.strokeStyle='#F2C230';S.texts.forEach(t=>{if(t===S.edit)return;const b=hitBox(t);ctx.strokeRect(b.x,b.y,b.w,b.h)});ctx.setLineDash([])}
+  if(S.phase!=='idle'||S.drag){ctx.globalAlpha=.5;ctx.drawImage(S.mask,0,0);ctx.globalAlpha=1}
+  ctx.restore();
+  placeTed();
+  ctx.lineWidth=2;ctx.strokeStyle='#F2C230';ctx.setLineDash([6,4]);
+  if(S.drag&&S.drag.t==='rect'){const a=toScr(S.drag.a),b=toScr(S.drag.b);ctx.strokeRect(a.x,a.y,b.x-a.x,b.y-a.y)}
+  if(S.pts&&S.pts.length){ctx.beginPath();S.pts.forEach((q,i)=>{const s=toScr(q);i?ctx.lineTo(s.x,s.y):ctx.moveTo(s.x,s.y)});
+    if(S.mode==='lasso'&&S.cur){const s=toScr(S.cur);ctx.lineTo(s.x,s.y)}ctx.stroke();
+    if(S.mode==='lasso'){ctx.setLineDash([]);S.pts.forEach((q,i)=>{const s=toScr(q);ctx.fillStyle=i?'#F2C230':'#fff';ctx.beginPath();ctx.arc(s.x,s.y,i?3:6,0,7);ctx.fill();ctx.stroke()})}}
+  if((S.phase==='paint'||S.mode==='pixel')&&S.cur){ctx.setLineDash([]);const s=toScr(S.cur),rr=Math.max(1,S.size/2*S.sc);
+    ctx.strokeStyle='#000';ctx.lineWidth=1;ctx.beginPath();ctx.arc(s.x,s.y,rr,0,7);ctx.stroke();ctx.strokeStyle='#fff';ctx.beginPath();ctx.arc(s.x,s.y,rr+1,0,7);ctx.stroke()}
+}
+
+/* history */
+function snap(){S.hist.push({b:cp(S.base),u:S.under&&{...S.under},t:JSON.stringify(S.texts)});if(S.hist.length>20)S.hist.shift();updUndo()}
+function updUndo(){$('#undo').disabled=!S.hist.length}
+$('#undo').onclick=()=>{const h=S.hist.pop();if(!h)return;closeEdit(true);S.base=h.b;S.under=h.u;S.texts=JSON.parse(h.t);if(!S.under)$('#underTool').style.display='none';updUndo();draw()};
+
+/* modes & context bar */
+function clearSel(){mx().clearRect(0,0,S.W,S.H);S.pts=null;S.drag=null}
+function setMode(m){closeEdit();S.mode=m;clearSel();S.phase='idle';S.erase=false;
+  document.querySelectorAll('[data-mode]').forEach(b=>b.classList.toggle('on',b.dataset.mode===m));bar();draw()}
+document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>S.W&&setMode(b.dataset.mode));
+const tips={rect:'Drag a box over the area.',trace:'Draw around the area in one go.',lasso:'Tap points around the area. Tap the white dot to close.',pan:'Drag to move around. Pinch or scroll to zoom.',under:'Drag to position the picture underneath.',text:'Tap text to edit it, drag to move it, or tap empty space to add text.',pixel:'Paint over an area to pixelate it.'};
+function bar(){const c=$('#ctx');let h='';
+  if(!S.W)h='<span class="msg">Upload a picture to start.</span>';
+  else if(S.phase==='confirm')h='<span class="msg">Is the selection okay?</span><button class="solid" id="bCut">Yes, cut out</button><button id="bAdj">Adjust</button><button id="bRedo">Start over</button>';
+  else if(S.phase==='paint')h=`<button id="bAdd" class="${S.erase?'':'on'}">Add</button><button id="bEr" class="${S.erase?'on':''}">Erase</button><span class="msg">Size</span><input type="range" id="bSz" min="1" max="200" value="${S.size}"><span class="msg" id="szL">${S.size}px</span><button class="solid" id="bFin">Finish</button>`;
+  else if(S.mode==='brush')h=`<span class="msg">Size</span><input type="range" id="bSz" min="1" max="200" value="${S.size}"><span class="msg" id="szL">${S.size}px</span><button class="solid" id="bStart">Start</button>`;
+  else if(S.mode==='lasso'&&S.pts&&S.pts.length)h=`<span class="msg">${tips.lasso}</span><button id="bClose" ${S.pts.length<3?'disabled':''}>Close shape</button><button id="bRedo">Start over</button>`;
+  else if(S.mode==='text'&&S.edit){const t=S.edit,fl=[...new Set([t.font,...(t.alts||[]),...FONTS])];
+    h=`<select id="tFont" aria-label="Font">${fl.map(f=>`<option ${f===t.font?'selected':''}>${f}</option>`).join('')}</select><span class="msg">Size</span><input type="range" id="tSz" min="4" max="${Math.max(200,Math.round(S.H/3))}" value="${Math.round(t.size)}"><input type="color" id="tCol" value="${t.color}" aria-label="Colour"><button id="tI" class="${t.italic?'on':''}"><i>I</i></button><span class="msg" id="tWl">Weight ${t.weight}</span><input type="range" id="tW" min="100" max="900" step="100" value="${t.weight}"><span class="msg">Extra bold</span><input type="range" id="tBo" min="0" max="15" step="0.5" value="${t.bold||0}"><span class="msg">Spacing</span><input type="range" id="tTr" min="-20" max="80" value="${Math.round(t.track||0)}"><span class="msg">Width</span><input type="range" id="tSx" min="30" max="250" value="${Math.round((t.sx||1)*100)}"><span class="msg">Height</span><input type="range" id="tSy" min="30" max="250" value="${Math.round((t.sy||1)*100)}"><button id="tReset">Reset shape</button>${t.box&&(sampleFn&&canImg||apiMode)?`<button id="tRef" ${S.busy?'disabled':''}>${S.busy?'Matching…':'Refine font match'}</button>`:''}${t.box?`<button id="tBg">Patch colour</button><input type="color" id="tBgc" value="${t.bg}" aria-label="Patch colour">`:''}<button id="tDel" style="color:var(--danger)">Delete</button><button class="solid" id="tDone">Done</button>${t.detected?`<span class="msg">Detected: ${esc(t.detected)}</span>`:''}`}
+  else if(S.mode==='pixel')h=`<span class="msg">Block</span><input type="range" id="pxSz" min="2" max="60" value="${S.pix}"><span class="msg">Grain</span><input type="range" id="pxGr" min="0" max="100" value="${S.grain}"><span class="msg">Scatter</span><input type="range" id="pxSc" min="0" max="100" value="${S.scatter}"><span class="msg">Brush</span><input type="range" id="pxB" min="6" max="300" value="${S.size}"><span class="msg">${tips.pixel}</span>`;
+  else if(S.mode==='text')h=`<button class="solid" id="tFind" ${(sampleFn&&canImg||apiMode)&&!S.busy?'':'disabled'}>${S.busy?'Reading…':'Find text & fonts'}</button><span class="msg">${S.note||tips.text}</span>`;
+  else if(S.mode==='under'&&S.under)h=`<span class="msg">Size</span><input type="range" id="uSz" min="5" max="400" value="${Math.round(S.under.s*100)}"><button id="uFill">Fill</button><span class="msg">${tips.under}</span>`;
+  else h=`<span class="msg">${tips[S.mode]||''}</span>`;
+  c.innerHTML=h;const on=(id,f)=>{const e=$('#'+id);if(e)e.onclick=f};
+  on('bCut',cutOut);on('bAdj',()=>{S.phase='paint';bar();draw()});on('bRedo',()=>{clearSel();S.phase='idle';bar();draw()});
+  on('bAdd',()=>{S.erase=false;bar()});on('bEr',()=>{S.erase=true;bar()});on('bStart',()=>{S.phase='paint';bar()});
+  on('bFin',()=>{if(maskEmpty()){S.phase='idle';bar();draw();return}S.phase='confirm';bar();draw()});
+  on('bClose',closeLasso);const pS=$('#pxSz');if(pS)pS.oninput=e=>{S.pix=+e.target.value};
+  const pG=$('#pxGr');if(pG)pG.oninput=e=>{S.grain=+e.target.value};
+  const pSc=$('#pxSc');if(pSc)pSc.oninput=e=>{S.scatter=+e.target.value};
+  const pB=$('#pxB');if(pB)pB.oninput=e=>{S.size=+e.target.value;draw()};
+  on('tFind',findText);on('tDone',()=>closeEdit());on('tDel',()=>{const t=S.edit;closeEdit(true);const i=S.texts.indexOf(t);if(i>=0)S.texts.splice(i,1);bar();draw()});
+  on('tReset',()=>{const t=S.edit;t.track=0;t.sx=1;t.sy=1;t.bold=0;touch();bar()});on('tRef',()=>refineFont(S.edit));
+  const tbo=$('#tBo');if(tbo)tbo.oninput=ev=>{S.edit.bold=+ev.target.value;touch()};
+  const tw=$('#tW');if(tw)tw.oninput=ev=>{S.edit.weight=+ev.target.value;$('#tWl').textContent='Weight '+S.edit.weight;touch()};
+  const ttr=$('#tTr');if(ttr)ttr.oninput=ev=>{S.edit.track=+ev.target.value;touch()};
+  const tsx=$('#tSx');if(tsx)tsx.oninput=ev=>{S.edit.sx=+ev.target.value/100;touch()};
+  const tsy=$('#tSy');if(tsy)tsy.oninput=ev=>{S.edit.sy=+ev.target.value/100;touch()};on('tI',()=>{S.edit.italic=!S.edit.italic;touch();bar()});
+  on('tBg',()=>{S.edit.bg=estBg(S.edit.box);touch();bar()});
+  const tf=$('#tFont');if(tf)tf.onchange=e=>{S.edit.font=e.target.value;loadFont(S.edit.font);touch()};
+  const ts=$('#tSz');if(ts)ts.oninput=e=>{S.edit.size=+e.target.value;touch()};
+  const tc=$('#tCol');if(tc)tc.oninput=e=>{S.edit.color=e.target.value;touch()};
+  const tb=$('#tBgc');if(tb)tb.oninput=e=>{S.edit.bg=e.target.value;touch()};on('uFill',()=>{snap();fillUnder();bar();draw()});
+  const sz=$('#bSz');if(sz)sz.oninput=e=>{S.size=+e.target.value;$('#szL').textContent=S.size+'px';draw()};
+  const us=$('#uSz');if(us){us.onpointerdown=snap;us.oninput=e=>{const u=S.under,cx=u.x+u.c.width*u.s/2,cy=u.y+u.c.height*u.s/2;
+    u.s=e.target.value/100;u.x=cx-u.c.width*u.s/2;u.y=cy-u.c.height*u.s/2;draw()}}
+}
+function maskEmpty(){const d=mx().getImageData(0,0,S.W,S.H).data;for(let i=3;i<d.length;i+=4)if(d[i]>127)return false;return true}
+
+/* selection builders */
+function fillPoly(pts){const m=mx();m.fillStyle=MASKC;m.beginPath();pts.forEach((q,i)=>i?m.lineTo(q.x,q.y):m.moveTo(q.x,q.y));m.closePath();m.fill()}
+function confirmSel(){S.pts=null;S.drag=null;S.phase=maskEmpty()?'idle':'confirm';bar();draw()}
+function closeLasso(){if(S.pts&&S.pts.length>=3){fillPoly(S.pts);confirmSel()}}
+function dab(m,x,y){const r=S.size/2;if(S.size<=1){m.fillRect(Math.floor(x),Math.floor(y),1,1);return}
+  const cx=Math.floor(x),cy=Math.floor(y),ri=Math.ceil(r);
+  for(let dy=-ri;dy<=ri;dy++){const yy=dy+.5-(S.size%2?0.5:0);if(Math.abs(yy)>r)continue;const w=Math.floor(Math.sqrt(r*r-yy*yy));m.fillRect(cx-w,cy+dy,2*w+(S.size%2?1:0),1)}}
+function paintLine(a,b){const m=mx();m.save();m.fillStyle=MASKC;if(S.erase)m.globalCompositeOperation='destination-out';
+  const n=Math.max(1,Math.ceil(Math.hypot(b.x-a.x,b.y-a.y)/Math.max(.5,S.size/4)));
+  for(let i=0;i<=n;i++)dab(m,a.x+(b.x-a.x)*i/n,a.y+(b.y-a.y)*i/n);m.restore()}
+
+function cutOut(){snap();const b=S.base.getContext('2d'),bd=b.getImageData(0,0,S.W,S.H),md=mx().getImageData(0,0,S.W,S.H).data;
+  for(let i=3;i<md.length;i+=4)if(md[i]>127)bd.data[i]=0;b.putImageData(bd,0,0);clearSel();S.phase='idle';bar();draw()}
+
+/* pointer input */
+const sp=e=>{const r=view.getBoundingClientRect();return{x:e.clientX-r.left,y:e.clientY-r.top}};
+function pinchInfo(){const [a,b]=[...ptrs.values()];return{mx:(a.x+b.x)/2,my:(a.y+b.y)/2,d:Math.hypot(a.x-b.x,a.y-b.y)}}
+function cancelDrag(){const d=S.drag;if(!d)return;if(d.t==='paint'&&d.snap){const m=mx();m.clearRect(0,0,S.W,S.H);m.drawImage(d.snap,0,0)}
+  if(d.t==='trace')S.pts=null;S.drag=null}
+view.addEventListener('pointerdown',e=>{if(!S.W)return;view.setPointerCapture(e.pointerId);const s=sp(e);ptrs.set(e.pointerId,s);
+  if(ptrs.size===2){cancelDrag();pinch={...pinchInfo(),sc:S.sc,tx:S.tx,ty:S.ty};draw();return}if(ptrs.size>2)return;
+  const p=toDoc(s);S.cur=p;
+  if(S.mode==='pixel'){snap();S.drag={t:'px',last:p};pixelDab(p);draw();return}
+  if(S.mode==='pan'||e.button===1){S.drag={t:'pan',s,tx:S.tx,ty:S.ty};return}
+  if(S.phase==='confirm')return;
+  if(S.phase==='paint'){S.drag={t:'paint',last:p,snap:cp(S.mask)};paintLine(p,p)}
+  else if(S.mode==='rect'){clearSel();S.drag={t:'rect',a:p,b:p}}
+  else if(S.mode==='trace'){clearSel();S.pts=[p];S.drag={t:'trace'}}
+  else if(S.mode==='lasso')S.drag={t:'tap',s};
+  else if(S.mode==='text'){const t=hitText(p);S.drag={t:'tx',s,item:t,dx:t?p.x-t.x:0,dy:t?p.y-t.y:0,moved:false}}
+  else if(S.mode==='under'&&S.under){snap();S.drag={t:'under',dx:p.x-S.under.x,dy:p.y-S.under.y}}
+  draw()});
+view.addEventListener('pointermove',e=>{const s=sp(e);if(ptrs.has(e.pointerId))ptrs.set(e.pointerId,s);
+  if(pinch&&ptrs.size===2){const i=pinchInfo(),n=Math.min(64,Math.max(.05,pinch.sc*i.d/pinch.d));
+    S.tx=i.mx-(pinch.mx-pinch.tx)*n/pinch.sc;S.ty=i.my-(pinch.my-pinch.ty)*n/pinch.sc;S.sc=n;draw();return}
+  const p=toDoc(s);S.cur=p;const d=S.drag;
+  if(d){if(d.t==='pan'){S.tx=d.tx+s.x-d.s.x;S.ty=d.ty+s.y-d.s.y}
+    else if(d.t==='paint'){paintLine(d.last,p);d.last=p}
+    else if(d.t==='rect')d.b=p;
+    else if(d.t==='trace'){const l=S.pts[S.pts.length-1];if(Math.hypot(p.x-l.x,p.y-l.y)*S.sc>2)S.pts.push(p)}
+    else if(d.t==='tx'&&d.item&&(d.moved||Math.hypot(s.x-d.s.x,s.y-d.s.y)>8)){if(!d.moved){snap();d.moved=true;d.item.edited=true}d.item.x=p.x-d.dx;d.item.y=p.y-d.dy}
+    else if(d.t==='px'){const n=Math.max(1,Math.ceil(Math.hypot(p.x-d.last.x,p.y-d.last.y)/(S.size/4)));for(let i=1;i<=n;i++)pixelDab({x:d.last.x+(p.x-d.last.x)*i/n,y:d.last.y+(p.y-d.last.y)*i/n});d.last=p}
+    else if(d.t==='under'){S.under.x=p.x-d.dx;S.under.y=p.y-d.dy}}
+  draw()});
+function up(e){ptrs.delete(e.pointerId);if(pinch){if(ptrs.size<2)pinch=null;S.drag=null;return}
+  const d=S.drag;if(!d)return;S.drag=null;
+  if(d.t==='rect'){const x=Math.round(Math.min(d.a.x,d.b.x)),y=Math.round(Math.min(d.a.y,d.b.y)),w=Math.round(Math.max(d.a.x,d.b.x))-x,h=Math.round(Math.max(d.a.y,d.b.y))-y;
+    if(w>0&&h>0){const m=mx();m.fillStyle=MASKC;m.fillRect(x,y,w,h)}confirmSel()}
+  else if(d.t==='trace'){if(S.pts.length>=3)fillPoly(S.pts);confirmSel()}
+  else if(d.t==='tx'&&!d.moved&&e.type==='pointerup'){if(d.item)startEdit(d.item);else if(S.edit)closeEdit();else addText(toDoc(sp(e)))}
+  else if(d.t==='tap'&&e.type==='pointerup'){const s=sp(e);if(Math.hypot(s.x-d.s.x,s.y-d.s.y)<8){const p=toDoc(s);
+    if(S.pts&&S.pts.length>=3){const f=toScr(S.pts[0]);if(Math.hypot(s.x-f.x,s.y-f.y)<14){closeLasso();return}}
+    (S.pts=S.pts||[]).push(p);bar()}}
+  draw()}
+view.addEventListener('pointerup',up);view.addEventListener('pointercancel',up);
+view.addEventListener('pointerleave',()=>{if(!S.drag){S.cur=null;draw()}});
+
+/* save */
+$('#save').onclick=()=>{const c=mk(S.W,S.H),x=c.getContext('2d');if(S.under){const u=S.under;x.drawImage(u.c,u.x,u.y,u.c.width*u.s,u.c.height*u.s)}
+  x.drawImage(S.base,0,0);closeEdit();drawTexts(x,null);
+  const show=()=>{$('#outImg').src=c.toDataURL('image/png');$('#out').style.display='flex'};
+  if(dl)c.toBlob(b=>dl.save({filename:'edited.png',data:b}).catch(e=>{if(e&&e.code!=='declined')show()}),'image/png');
+  else if(apiMode){const a=document.createElement('a');a.href=c.toDataURL('image/png');a.download='edited.png';document.body.append(a);a.click();a.remove()}else show()};
+$('#closeOut').onclick=()=>$('#out').style.display='none';
+
+/* standalone (e.g. Vercel): text finding via /api/find-text */
+async function apiFind(blob,prompt){const b64=await new Promise((ok,no)=>{const fr=new FileReader();fr.onload=()=>ok(String(fr.result).split(',')[1]);fr.onerror=no;fr.readAsDataURL(blob)});
+  const res=await fetch('/api/find-text',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:b64,prompt})});
+  if(!res.ok)throw{code:'upstream_error'};return res.json()}
+
+/* refine one text block's font with a close-up crop */
+async function askVision(blob,prompt){return sampleFn?await sampleFn.json(prompt,{images:blob,modelTier:'complex'}):await apiFind(blob,prompt)}
+async function refineFont(t){if(!t||!t.box||S.busy)return;S.busy=true;bar();
+  try{const b=t.box,pad=Math.max(6,b.h*.25),x0=Math.max(0,b.x-pad),y0=Math.max(0,b.y-pad),w=Math.min(S.W,b.x+b.w+pad)-x0,h=Math.min(S.H,b.y+b.h+pad)-y0;
+    const k=Math.min(6,1400/Math.max(w,h)),c=mk(Math.round(w*k),Math.round(h*k)),x=c.getContext('2d');x.imageSmoothingQuality='high';x.drawImage(S.base,x0,y0,w,h,0,0,c.width,c.height);
+    const blob=await new Promise(r=>c.toBlob(r,'image/png'));
+    const r=await askVision(blob,`This is a close-up crop of text "${t.orig||t.text}" from a picture. Act as a type expert. Study letterforms closely: serif or sans, geometric/grotesque/humanist, stroke contrast, terminals, x-height, aperture, and distinctive glyphs (a, g, R, Q, t, y, numerals).
+Reply with only JSON: {"font":"most likely exact typeface","googleFont":"closest Google Fonts family","alternatives":["2-4 other close Google Fonts"],"weight":400,"italic":false,"letterSpacing":0,"widthScale":1,"color":"#000000","reason":"one short sentence"}.
+weight is 100-900; letterSpacing is extra spacing in percent of font size; widthScale compares glyph width with the googleFont (1 = same).`);
+    snap();const gf=String(r.googleFont||t.font).trim()||t.font;loadFont(gf);(r.alternatives||[]).forEach(f=>loadFont(String(f)));
+    Object.assign(t,{font:gf,alts:Array.isArray(r.alternatives)?r.alternatives.map(String).slice(0,4):t.alts,
+      weight:Math.min(900,Math.max(100,Math.round((+r.weight||t.weight)/100)*100)),italic:!!r.italic,
+      track:isFinite(+r.letterSpacing)?+r.letterSpacing:t.track,sx:+r.widthScale>0?+r.widthScale:t.sx,
+      color:/^#[0-9a-f]{6}$/i.test(r.color)?r.color:t.color,detected:(r.font&&r.font!==gf?`${r.font} (using ${gf})`:gf)+(r.reason?` — ${r.reason}`:'')});
+    t.edited=true;t.dirty=true;
+  }catch(e){S.note='Font match failed. Try again.'}
+  S.busy=false;bar();draw()}
+
+/* pixelate */
+const clamp=v=>v<0?0:v>255?255:v;
+function pixelDab(p){const r=S.size/2,bl=Math.max(2,S.pix|0),g=S.grain/100;
+  const x0=Math.max(0,Math.floor(p.x-r)),y0=Math.max(0,Math.floor(p.y-r)),x1=Math.min(S.W,Math.ceil(p.x+r)),y1=Math.min(S.H,Math.ceil(p.y+r));if(x1<=x0||y1<=y0)return;
+  const c=S.base.getContext('2d'),img=c.getImageData(x0,y0,x1-x0,y1-y0),d=img.data,W=img.width;
+  for(let by=Math.floor(y0/bl);by<=Math.floor((y1-1)/bl);by++)for(let bx=Math.floor(x0/bl);bx<=Math.floor((x1-1)/bl);bx++){
+    const gx0=Math.max(x0,bx*bl),gy0=Math.max(y0,by*bl),gx1=Math.min(x1,bx*bl+bl),gy1=Math.min(y1,by*bl+bl);let R=0,G=0,B=0,n=0;
+    for(let yy=gy0;yy<gy1;yy++)for(let xx=gx0;xx<gx1;xx++){const k=((yy-y0)*W+(xx-x0))*4;R+=d[k];G+=d[k+1];B+=d[k+2];n++}
+    if(!n)continue;R/=n;G/=n;B/=n;const blockNoise=(Math.random()-.5)*120*g;
+    for(let yy=gy0;yy<gy1;yy++)for(let xx=gx0;xx<gx1;xx++){const dx=xx-p.x,dy=yy-p.y;if(dx*dx+dy*dy>r*r)continue;
+      const k=((yy-y0)*W+(xx-x0))*4,nz=blockNoise+(Math.random()-.5)*160*g*g,speck=Math.random()<.04*g?(Math.random()<.5?-90:90):0;
+      d[k]=clamp(R+nz+speck);d[k+1]=clamp(G+nz+speck);d[k+2]=clamp(B+nz+speck)}}
+  // scatter: drop random blocks copied from random nearby spots
+  const sc=S.scatter/100,cnt=Math.round(sc*(r*r*Math.PI)/(bl*bl)*.35);
+  for(let i=0;i<cnt;i++){const a=Math.random()*6.283,q=Math.sqrt(Math.random())*r,tx=Math.floor((p.x+Math.cos(a)*q)/bl)*bl,ty=Math.floor((p.y+Math.sin(a)*q)/bl)*bl;
+    const sx=Math.floor((tx+(Math.random()-.5)*r*1.6)/bl)*bl,sy=Math.floor((ty+(Math.random()-.5)*r*1.6)/bl)*bl;
+    const si=((Math.min(y1-1,Math.max(y0,sy))-y0)*W+(Math.min(x1-1,Math.max(x0,sx))-x0))*4;
+    const cr=d[si],cg=d[si+1],cb=d[si+2];
+    for(let yy=Math.max(y0,ty);yy<Math.min(y1,ty+bl);yy++)for(let xx=Math.max(x0,tx);xx<Math.min(x1,tx+bl);xx++){const dx=xx-p.x,dy=yy-p.y;if(dx*dx+dy*dy>r*r)continue;
+      const k=((yy-y0)*W+(xx-x0))*4;d[k]=cr;d[k+1]=cg;d[k+2]=cb}}
+  c.putImageData(img,x0,y0)}
+
+/* text */
+const FONTS=['Inter','Roboto','Open Sans','Montserrat','Poppins','Lato','Oswald','Raleway','Bebas Neue','Anton','Playfair Display','Merriweather','Lora','Roboto Slab','Pacifico','Dancing Script','Caveat','Permanent Marker'];
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const loaded=new Set(['Manrope']);
+function loadFont(f){if(!f||loaded.has(f))return;loaded.add(f);const base='https://fonts.googleapis.com/css2?family='+encodeURIComponent(f).replace(/%20/g,'+');
+  const add=(h,fb)=>{const l=document.createElement('link');l.rel='stylesheet';l.href=h;if(fb)l.onerror=()=>add(fb);l.onload=()=>{['100','300','400','500','700','900','italic 400','italic 700'].forEach(w=>document.fonts.load(w+' 40px "'+f+'"').then(draw,()=>{}))};document.head.append(l)};
+  add(base+':ital,wght@0,100;0,300;0,400;0,500;0,700;0,900;1,400;1,700&display=swap',base+'&display=swap')}
+const fontStr=(t,sz)=>`${t.italic?'italic ':''}${t.weight} ${sz}px "${t.font}", sans-serif`;
+function lineW(x,l,tr){let w=0;for(const ch of l)w+=x.measureText(ch).width+tr;return Math.max(0,w-(l.length?tr:0))}
+function measure(t){ctx.save();ctx.font=fontStr(t,t.size);const tr=(t.track||0)*t.size/100,ls=t.text.split('\n');
+  const w=Math.max(t.size*.5,...ls.map(l=>lineW(ctx,l,tr)));ctx.restore();return{w:w*(t.sx||1),h:ls.length*t.size*1.2*(t.sy||1)}}
+function hitBox(t){if(t.box&&!t.edited)return t.box;const m=measure(t);return{x:t.x,y:t.y,w:m.w,h:m.h}}
+function hitText(p){for(let i=S.texts.length-1;i>=0;i--){const t=S.texts[i];const bs=[hitBox(t)];if(t.box)bs.push(t.box);if(bs.some(b=>p.x>=b.x-4&&p.y>=b.y-4&&p.x<=b.x+b.w+4&&p.y<=b.y+b.h+4))return t}return null}
+function drawTexts(x,skip){S.texts.forEach(t=>{if(!t.edited)return;
+  if(t.box){x.fillStyle=t.bg;x.fillRect(t.box.x-3,t.box.y-3,t.box.w+6,t.box.h+6)}
+  if(t===skip)return;x.save();x.fillStyle=t.color;x.font=fontStr(t,t.size);x.textBaseline='top';
+  x.translate(t.x,t.y);x.scale(t.sx||1,t.sy||1);const tr=(t.track||0)*t.size/100;
+  const sw=(t.bold||0)*t.size/100;if(sw>0){x.strokeStyle=t.color;x.lineWidth=sw;x.lineJoin='round'}
+  t.text.split('\n').forEach((l,i)=>{let cx=0,cy=(.1+1.2*i)*t.size;for(const ch of l){if(sw>0)x.strokeText(ch,cx,cy);x.fillText(ch,cx,cy);cx+=x.measureText(ch).width+tr}});x.restore()})}
+function estBg(b){const c=S.base.getContext('2d'),x0=Math.max(0,Math.floor(b.x-4)),y0=Math.max(0,Math.floor(b.y-4)),x1=Math.min(S.W-1,Math.ceil(b.x+b.w+4)),y1=Math.min(S.H-1,Math.ceil(b.y+b.h+4));
+  const d=c.getImageData(x0,y0,x1-x0+1,y1-y0+1),w=d.width,h=d.height,R=[],G=[],B=[];
+  const px=(i,j)=>{const k=(j*w+i)*4;if(d.data[k+3]<128)return;R.push(d.data[k]);G.push(d.data[k+1]);B.push(d.data[k+2])};
+  for(let i=0;i<w;i++){px(i,0);px(i,h-1)}for(let j=0;j<h;j++){px(0,j);px(w-1,j)}
+  const med=a=>{if(!a.length)return 255;a.sort((m,n)=>m-n);return a[a.length>>1]};
+  return '#'+[med(R),med(G),med(B)].map(v=>v.toString(16).padStart(2,'0')).join('')}
+const ted=$('#ted');
+function placeTed(){const t=S.edit;if(!t){ted.style.display='none';return}const s=toScr(t),m=measure(t);
+  Object.assign(ted.style,{display:'block',left:s.x+'px',top:s.y+'px',font:fontStr(t,t.size*S.sc*(t.sy||1)),letterSpacing:((t.track||0)*t.size*S.sc*(t.sy||1)/100)+'px',lineHeight:'1.2',color:t.color,transform:`scaleX(${(t.sx||1)/(t.sy||1)})`,webkitTextStroke:((t.bold||0)*t.size*S.sc*(t.sy||1)/100)+'px '+t.color,transformOrigin:'top left',width:(m.w/(t.sx||1)*(t.sy||1)*S.sc+t.size*S.sc)+'px',height:(m.h*S.sc+4)+'px'})}
+function touch(){if(S.edit){S.edit.edited=true;S.edit.dirty=true}draw()}
+function startEdit(t){if(S.edit===t)return;closeEdit();snap();S.edit=t;t.wasEdited=t.edited;t.edited=true;t.dirty=false;loadFont(t.font);ted.value=t.text;bar();draw();ted.focus()}
+function closeEdit(silent){const t=S.edit;if(!t)return;S.edit=null;ted.style.display='none';ted.blur();
+  if(!t.text.trim()&&!t.box)S.texts.splice(S.texts.indexOf(t),1);
+  else if(!t.dirty&&!t.wasEdited)t.edited=false;
+  if(!silent){bar();draw()}}
+ted.addEventListener('input',()=>{if(!S.edit)return;S.edit.text=ted.value;touch()});
+ted.addEventListener('pointerdown',e=>e.stopPropagation());
+function addText(p){const sz=Math.max(12,Math.round(S.H/18));const t={text:'',x:p.x,y:p.y-sz*.6,size:sz,font:'Inter',weight:700,italic:false,color:'#ffffff',track:0,sx:1,sy:1,bold:0,edited:true};
+  S.texts.push(t);startEdit(t);t.dirty=true}
+async function findText(){if(!(sampleFn||apiMode)||S.busy)return;S.busy=true;S.note='';bar();
+  try{const k=Math.min(1,1568/Math.max(S.W,S.H)),c=mk(Math.round(S.W*k),Math.round(S.H*k)),x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);x.scale(k,k);
+    if(S.under){const u=S.under;x.drawImage(u.c,u.x,u.y,u.c.width*u.s,u.c.height*u.s)}x.drawImage(S.base,0,0);
+    const blob=await new Promise(r=>c.toBlob(r,'image/jpeg',.92));
+    const PROMPT=(`You are the text detector in an image editor. Find every piece of readable text in the attached image.
+Group text that shares one line and one style into a block; put consecutive lines of the same paragraph and style in one block separated by \\n.
+For each block give a tight bounding box around the glyphs in coordinates where the image is 1000 units wide and 1000 units tall: [x0,y0,x1,y1].
+Identify the typeface as specifically as you can ("font") by looking at letter shapes (serifs, terminals, x-height, stroke contrast, a/g/R/Q forms), and name the closest family available on Google Fonts ("googleFont"). Give the weight 100-900, "letterSpacing" as extra spacing in percent of font size (0 normal), and "widthScale" (1 normal, <1 condensed, >1 extended) compared with that Google font. List 2-4 other close Google Fonts in "alternatives".
+Estimate "size": the font size (em size) in the same 0-1000 vertical units. Give the text colour as a hex string.
+Reply with only JSON: {"blocks":[{"text":"...","box":[0,0,0,0],"lines":1,"size":0,"font":"...","googleFont":"...","weight":400,"italic":false,"letterSpacing":0,"widthScale":1,"alternatives":["...","..."],"color":"#000000"}]}. If there is no text reply {"blocks":[]}.`);
+    const r=sampleFn?await sampleFn.json(PROMPT,{images:blob}):await apiFind(blob,PROMPT);
+    const bl=(r&&Array.isArray(r.blocks))?r.blocks:[];snap();
+    S.texts=S.texts.filter(t=>!t.box||t.edited);
+    bl.forEach(b=>{const bx=(b.box||[]).map(Number);if(bx.length!==4||bx.some(isNaN))return;
+      const box={x:bx[0]/1000*S.W,y:bx[1]/1000*S.H,w:(bx[2]-bx[0])/1000*S.W,h:(bx[3]-bx[1])/1000*S.H};if(box.w<=0||box.h<=0)return;
+      const lines=Math.max(1,+b.lines||String(b.text).split('\n').length),size=Math.max(6,(+b.size>0?+b.size/1000*S.H:box.h/lines/1.1));
+      const gf=String(b.googleFont||'Inter').trim()||'Inter';loadFont(gf);
+      S.texts.push({text:String(b.text||''),orig:String(b.text||''),box,x:box.x,y:box.y-size*.12,size:Math.round(size),font:gf,detected:b.font&&b.font!==gf?`${b.font} (using ${gf})`:gf,
+        weight:Math.min(900,Math.max(100,Math.round((+b.weight||400)/100)*100)),italic:!!b.italic,track:+b.letterSpacing||0,bold:0,alts:Array.isArray(b.alternatives)?b.alternatives.map(String).slice(0,4):[],sx:+b.widthScale>0?+b.widthScale:1,sy:1,color:/^#[0-9a-f]{6}$/i.test(b.color)?b.color:'#000000',bg:estBg(box),edited:false})});
+    S.note=bl.length?`Found ${bl.length} text block${bl.length>1?'s':''}. Tap one to edit.`:'No text found.';
+  }catch(e){S.note={not_granted:'Text finding was not allowed.',rate_limited:'Too many requests. Try again shortly.',image_rejected:'The picture could not be read.',invalid_json:'Could not read the result. Try again.'}[e&&e.code]||'Text finding failed. Try again.'}
+  S.busy=false;bar();draw()}
+(async()=>{if(!window.claude)return;try{const [smp,d]=await Promise.all([claude.use('sample'),claude.use('downloads')]);dl=d;
+  if(smp){sampleFn=smp;const l=await smp.limits().catch(()=>null);canImg=!!(l&&l.images)}}catch(e){}bar()})();
+fit();bar();
+</script>
+</body>
+</html>
