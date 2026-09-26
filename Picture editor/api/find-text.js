@@ -7,6 +7,8 @@ const { Anthropic, APIError } = require('@anthropic-ai/sdk');
 const MEDIA = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 
 module.exports = async (req, res) => {
+  // GET tells the page whether text reading is set up, so it can stay quiet when there is no key.
+  if (req.method === 'GET') return res.status(200).json({ ready: !!process.env.ANTHROPIC_API_KEY });
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
   if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY is not set on the server' });
   const { image, prompt, mediaType } = req.body || {};

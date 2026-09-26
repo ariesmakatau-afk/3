@@ -94,12 +94,12 @@ textarea#tTxt{min-width:12rem;resize:none;padding:.4rem .55rem;font-weight:600;l
 const $=s=>document.querySelector(s),view=$('#view'),ctx=view.getContext('2d');
 const S={W:0,H:0,base:null,mask:null,under:null,tab:'pic',mode:'rect',last:{pic:'rect',text:'tfree'},phase:'idle',erase:false,size:10,sc:1,tx:0,ty:0,hist:[],drag:null,pts:null,cur:null,
   texts:[],edit:null,editSnapped:false,field:null,fbrush:0,fsize:12,fbusy:false,clip:null,nid:1,busy:false,note:'',pix:14,grain:55,scatter:40};
-let sampleFn=null,canImg=false,dl=null,apiMode=!window.claude;
+let sampleFn=null,canImg=false,dl=null,apiMode=!window.claude,apiReady=false;
 const MASKC='#FF2D7A',ptrs=new Map(),crops=new Map();let pinch=null;
 const mk=(w,h)=>{const c=document.createElement('canvas');c.width=w;c.height=h;return c};
 const cp=c=>{const n=mk(c.width,c.height);n.getContext('2d').drawImage(c,0,0);return n};
 const mx=()=>S.mask.getContext('2d');
-const aiOK=()=>!!(sampleFn&&canImg||apiMode);
+const aiOK=()=>!!(sampleFn&&canImg||apiMode&&apiReady);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const clampN=(v,a,b)=>Math.min(b,Math.max(a,v));
 function readImg(f,cb){if(!f)return;const i=new Image();i.onload=()=>cb(i);i.src=URL.createObjectURL(f)}
@@ -185,7 +185,8 @@ function picBar(){
 function textBar(){const t=S.edit,f=S.field;
   if(t){const fl=[...new Set([t.font,...(t.alts||[]),...FONTS])];
     return[`<textarea id="tTxt" rows="${Math.min(4,t.text.split('\n').length)}" aria-label="Text" placeholder="Type text" spellcheck="false">${esc(t.text)}</textarea>`+
-      `<select id="tFont" aria-label="Font">${fl.map(n=>`<option ${n===t.font?'selected':''}>${esc(n)}</option>`).join('')}</select>`+
+      (S.fontEntry?`<input id="tFontIn" type="text" aria-label="Google Font name" placeholder="Google Font name" value="" spellcheck="false"><button id="tFontGo">Use font</button><button id="tFontX">Back</button>`:
+        `<select id="tFont" aria-label="Font">${fl.map(n=>`<option ${n===t.font?'selected':''}>${esc(n)}</option>`).join('')}<option value="__type">Type a font name…</option></select>`)+
       `<span class="msg">Size</span><input type="range" id="tSz" min="4" max="${Math.max(200,Math.round(S.H/3),Math.round(t.size))}" value="${Math.round(t.size)}">`+
       `<input type="color" id="tCol" value="${t.color}" aria-label="Colour"><span class="msg" id="tWl">Weight ${t.weight}</span><input type="range" id="tW" min="100" max="900" step="100" value="${t.weight}">`+
       `<button id="tI" class="${t.italic?'on':''}" aria-label="Italic"><i>I</i></button><button id="tCopy">Copy style</button>${S.clip?'<button id="tPaste">Paste style</button>':''}`+
@@ -202,7 +203,7 @@ function textBar(){const t=S.edit,f=S.field;
     else if(f.status==='reading')info='<span class="msg">Reading the selected text and font…</span>';
     else if(f.status==='ready')info=f.info.text?`<span class="chip" title="${esc(f.info.text)}">${esc(f.info.text.replace(/\n/g,' / '))}</span><span class="msg">${esc(f.detected)}</span><span class="sw" style="background:${f.color}" title="Text colour ${f.color}"></span>`:'<span class="msg">No text found in that area. You can still erase it.</span>';
     else if(f.status==='error')info=`<span class="msg warn">Could not read the text: ${esc(f.err)} You can still erase it and type.</span>`;
-    else info='<span class="msg">Text reading is not set up here. You can still erase it and type.</span>';
+    else info='<span class="msg">Text reading is off (no API key). Erase it or replace it, then pick the font yourself.</span>';
     const wait=f.status==='reading'||S.fbusy;
     return[info+`<button class="solid" id="fRep" ${wait?'disabled':''}>Replace text</button><button id="fErase" ${S.fbusy?'disabled':''}>Erase text</button><button id="fCopy" ${wait?'disabled':''}>Copy style</button><button id="fCancel">Cancel</button>`,
       `<span class="grp">Remove</span><button id="fGl" class="${f.area?'':'on'}">Letters only</button><button id="fAr" class="${f.area?'on':''}">Whole area</button>`+
@@ -221,7 +222,9 @@ function wire(){const on=(id,f)=>{const e=$('#'+id);if(e)e.onclick=f},inp=(id,f)
     u.s=e.target.value/100;u.x=cx-u.c.width*u.s/2;u.y=cy-u.c.height*u.s/2;draw()}}
   // text object editing
   const tt=$('#tTxt');if(tt)tt.oninput=e=>{const v=e.target.value;chg(()=>S.edit.text=v);e.target.rows=Math.min(4,v.split('\n').length)};
-  const tf=$('#tFont');if(tf)tf.onchange=e=>{chg(()=>S.edit.font=e.target.value);ensureFont(S.edit)};
+  const tf=$('#tFont');if(tf)tf.onchange=e=>{if(e.target.value==='__type'){S.fontEntry=true;bar();const i=$('#tFontIn');if(i)i.focus();return}chg(()=>S.edit.font=e.target.value);ensureFont(S.edit)};
+  const tfi=$('#tFontIn');if(tfi)tfi.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();useTypedFont()}else if(e.key==='Escape'){e.stopPropagation();S.fontEntry=false;bar()}};
+  on('tFontGo',useTypedFont);on('tFontX',()=>{S.fontEntry=false;bar()});
   inp('tSz',v=>chg(()=>S.edit.size=v));const tc=$('#tCol');if(tc)tc.oninput=e=>chg(()=>S.edit.color=e.target.value);
   inp('tW',v=>{chg(()=>S.edit.weight=v);$('#tWl').textContent='Weight '+v;ensureFont(S.edit)});
   on('tI',()=>{chg(()=>S.edit.italic=!S.edit.italic);ensureFont(S.edit);bar()});
@@ -355,6 +358,15 @@ function loadFont(f){if(!f||f==='Manrope')return Promise.resolve();if(fontReq.ha
   fontReq.set(f,p);return p}
 function ensureFont(t){return loadFont(t.font).then(()=>Promise.race([document.fonts.load(fontStr(t,40)),new Promise(r=>setTimeout(r,4000))])).catch(()=>{}).then(()=>draw())}
 document.fonts.addEventListener('loadingdone',()=>draw());
+// Fonts typed by name are remembered in this browser and added to the font list.
+try{JSON.parse(localStorage.getItem('customFonts')||'[]').forEach(f=>typeof f==='string'&&!FONTS.includes(f)&&FONTS.unshift(f))}catch(e){}
+const fontName=v=>{const n=String(v||'').trim().replace(/\s+/g,' ');return /[A-Z]/.test(n)?n:n.replace(/\b[a-z]/g,c=>c.toUpperCase())};
+async function useTypedFont(){const t=S.edit,i=$('#tFontIn');if(!t||!i)return;const name=fontName(i.value);if(!name)return;
+  i.disabled=true;S.note='Loading '+name+'…';bar();
+  const ok=await loadFont(name);if(S.edit!==t)return;
+  if(!ok){fontReq.delete(name);S.note=`Couldn't find "${name}" on Google Fonts. Check the spelling.`;bar();const j=$('#tFontIn');if(j){j.value=name;j.focus()}return}
+  if(!FONTS.includes(name)){FONTS.unshift(name);try{const c=JSON.parse(localStorage.getItem('customFonts')||'[]');localStorage.setItem('customFonts',JSON.stringify([name,...c.filter(f=>f!==name)].slice(0,20)))}catch(e){}}
+  S.fontEntry=false;S.note='';chg(()=>t.font=name);await ensureFont(t);bar()}
 
 /* text objects */
 const STYLE=['font','alts','weight','italic','color','size','track','sx','sy','lh','bold'];
@@ -377,9 +389,9 @@ function drawTexts(x){S.texts.forEach(t=>{if(!t.text)return;x.save();x.fillStyle
     let cx=0;for(const ch of l){if(sw>0)x.strokeText(ch,cx,y);x.fillText(ch,cx,y);cx+=x.measureText(ch).width+tr}});x.restore()})}
 // Record one undo step before the first change of an editing session.
 function chg(fn){if(!S.edit)return;if(!S.editSnapped){snap();S.editSnapped=true}fn();draw()}
-function startEdit(t,selectAll,snapped){if(S.edit===t)return;closeEdit(true);S.field=null;S.fbrush=0;S.note='';S.edit=t;S.editSnapped=!!snapped;ensureFont(t);bar();draw();
+function startEdit(t,selectAll,snapped){if(S.edit===t)return;closeEdit(true);S.fontEntry=false;S.field=null;S.fbrush=0;S.note='';S.edit=t;S.editSnapped=!!snapped;ensureFont(t);bar();draw();
   const a=$('#tTxt');if(a){a.focus();if(selectAll)a.select();else a.setSelectionRange(a.value.length,a.value.length)}}
-function closeEdit(silent){const t=S.edit;if(!t)return;S.edit=null;
+function closeEdit(silent){const t=S.edit;if(!t)return;S.edit=null;S.fontEntry=false;
   if(!t.text.trim()){const i=S.texts.indexOf(t);if(i>=0)S.texts.splice(i,1)}
   if(!silent){bar();draw()}}
 function addText(p){const st=S.clip?pickStyle(S.clip):{font:'Inter',alts:[],weight:700,italic:false,color:'#ffffff',size:Math.max(12,Math.round(S.H/18)),track:0,sx:1,sy:1,lh:1.2,bold:0};
@@ -514,7 +526,7 @@ async function apiFind(blob,prompt){const b64=await new Promise((ok,no)=>{const 
   return res.json()}
 async function askVision(blob,prompt){return sampleFn?await sampleFn.json(prompt,{images:blob,modelTier:'complex'}):await apiFind(blob,prompt)}
 
-(async()=>{if(!window.claude)return;try{const [smp,d]=await Promise.all([claude.use('sample'),claude.use('downloads')]);dl=d;
+(async()=>{if(!window.claude){try{const r=await fetch('/api/find-text');apiReady=r.ok&&!!(await r.json()).ready}catch(e){}bar();return}try{const [smp,d]=await Promise.all([claude.use('sample'),claude.use('downloads')]);dl=d;
   if(smp){sampleFn=smp;const l=await smp.limits().catch(()=>null);canImg=!!(l&&l.images)}}catch(e){}bar()})();
 fit();bar();
 </script>
