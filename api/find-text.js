@@ -1,7 +1,7 @@
 // Vercel serverless function used by the Text tab to read text and fonts.
 // Set ANTHROPIC_API_KEY in Vercel > Project > Settings > Environment Variables.
 // Optional: ANTHROPIC_MODEL to use a different Claude model.
-// Deploy with "Picture editor" as the project root so this file is served at /api/find-text.
+// Served at /api/find-text next to index.html.
 const { Anthropic, APIError } = require('@anthropic-ai/sdk');
 
 const MEDIA = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
